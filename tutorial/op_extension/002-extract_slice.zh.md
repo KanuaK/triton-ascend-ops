@@ -1,4 +1,4 @@
-# 002-extract_slicee.py说明
+# 002-extract_slice.py说明
 
 ## 功能
 大模型训练/推理中MOE Token反重排场景下，新增extract_slice接口，实现数据批量读取到UB，从UB中截取部分处理，加速npu计算流程  
@@ -17,7 +17,7 @@
     :param strides:
     :type strides: tuple of ints
 """
-def extract_slice(ful, offsets, sizes, strides, _builder=None, _generator=None) -> tensor:
+def extract_slice(ful, offsets, sizes, strides, _semantic=None, _generator=None) -> tensor:
 ```
 
 ## 差异点概述
@@ -25,6 +25,7 @@ def extract_slice(ful, offsets, sizes, strides, _builder=None, _generator=None) 
 GPU实现：每个kernel处理一个Token，利用多核优势能够达成很好的性能   
 NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到性能最佳，针对Moe反重排，读取数据连续，每段写出到不同的位置，提供extract_slice接口，支持从一个大的Tensor中，读取部分数据，然后对该数据操作，达成批量读取，分散操作的目的   
 
+使用前需导入 `import triton.language.extra.cann.extension as extension`。
 
 ## 差异点详解
 
@@ -59,7 +60,7 @@ def npu_token_reverse_kernel(x_ptr, indices, output_ptr, n_elements, S : tl.cons
     block_start = pid * BLOCK_SIZE * D
 
     # 1. batch load data
-    data_offset = D * tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, BLOCK_SIZE)[None, :]
+    data_offset = D * tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, D)[None, :]
     data_mask = data_offset < n_elements
     data = tl.load(x_ptr + block_start + data_offset, data_mask)
 
@@ -70,9 +71,9 @@ def npu_token_reverse_kernel(x_ptr, indices, output_ptr, n_elements, S : tl.cons
     idx = tl.load(indices + idx_start, idx_mask)
 
     # 3. extract token one by one and store
-    for i in tl.arange(0, BLOCK_SIZE):
-        x_sub = tl.extract_slice(data, [i,0], [1,D], [1,1])
-        output_offset = D * tl.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
+    for i in tl.range(0, BLOCK_SIZE):
+        x_sub = extension.extract_slice(data, [i, 0], [1, D], [1, 1])
+        output_offset = D * extension.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
         out_mask = output_offset < n_elements
         tl.store(output_ptr + output_offset, x_sub, out_mask)
 

@@ -1,7 +1,9 @@
 import time
 import triton
 import torch
+import torch_npu
 import triton.language as tl
+import triton.language.extra.cann.extension as extension
 
 
 @triton.jit
@@ -110,12 +112,12 @@ def grouped_attention_kernel_stage1(
             for i in range(start_n, min(BLOCK_N + start_n, split_kv_end)):
                 ind = i - start_n
                 offs_buf_k = (
-                    tl.get_element(kv_loc, (ind, ))  * stride_buf_kbs
+                    extension.get_element(kv_loc, (ind, ))  * stride_buf_kbs
                     + cur_kv_head * stride_buf_kh
                     + offs_d[None, :]
                 )
                 k_tmp = tl.load(K_Buffer + offs_buf_k, mask=(mask_d[None, :]), other=0.0)
-                k = tl.insert_slice(k, k_tmp, (ind, 0), (1, BLOCK_DMODEL), (1, 1))
+                k = extension.insert_slice(k, k_tmp, (ind, 0), (1, BLOCK_DMODEL), (1, 1))
             k = tl.trans(k, (1, 0))
 
             qk = tl.dot(q, k.to(q.dtype))
@@ -136,12 +138,12 @@ def grouped_attention_kernel_stage1(
                 for i in range(start_n, min(BLOCK_N + start_n, split_kv_end)):
                     ind = i - start_n
                     offs_buf_kpe = (
-                        tl.get_element(kv_loc, (ind, ))  * stride_buf_kbs
+                        extension.get_element(kv_loc, (ind, ))  * stride_buf_kbs
                         + cur_kv_head * stride_buf_kh
                         + offs_dpe[None, :]
                     )
                     kpe_tmp = tl.load(K_Buffer + offs_buf_kpe, mask=(mask_dpe[None, :]), other=0.0)
-                    kpe = tl.insert_slice(kpe, kpe_tmp, (ind, 0), (1, BLOCK_DPE), (1, 1))
+                    kpe = extension.insert_slice(kpe, kpe_tmp, (ind, 0), (1, BLOCK_DPE), (1, 1))
                 kpe = tl.trans(kpe, (1, 0))
 
                 qk += tl.dot(qpe, kpe.to(qpe.dtype))
@@ -278,12 +280,7 @@ def get_device() -> torch.device:
     if hasattr(torch, "npu") and torch.npu.is_available():
         # 华为昇腾 NPU 优先
         return torch.device('npu:0'), 'npu'
-    elif torch.cuda.is_available():
-        # NVIDIA CUDA
-        return torch.device('cuda:0'), 'cuda'
-    else:
-        # 默认使用 CPU
-        return torch.device('cpu'), 'cpu'
+    raise RuntimeError("This Ascend best-practice example requires an available NPU device.")
 
 
 def test_grouped_decode_attention_kernel(B, S, H_Q, H_KV, D, D_V):
@@ -302,11 +299,11 @@ def test_grouped_decode_attention_kernel(B, S, H_Q, H_KV, D, D_V):
     k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device=device)
     v_buffer = torch.randn(total_tokens, H_KV, D_V, dtype=dtype, device=device)
 
-    b_seq_len = torch.full((B,), seq_len, device=device)
+    b_seq_len = torch.full((B,), seq_len, dtype=torch.int32, device=device)
 
     kv_indptr = torch.zeros((B + 1,), dtype=torch.int32, device=device)
     kv_indptr[1 : B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
-    kv_indices = torch.arange(total_tokens, device=device)
+    kv_indices = torch.arange(total_tokens, dtype=torch.int32, device=device)
 
     attn_logits = torch.empty(
         (B, H_Q, max_kv_splits, D_V),

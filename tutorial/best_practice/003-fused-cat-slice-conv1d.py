@@ -1,10 +1,3 @@
-from typing import Optional
-
-import torch
-import torch.nn.functional as F
-
-PAD_SLOT_ID = -1
-
 from typing import Optional, Union
 
 import pytest
@@ -13,6 +6,12 @@ import torch.nn.functional as F
 from einops import rearrange
 import triton
 import triton.language as tl
+import triton.language.extra.cann.extension as extension
+
+try:
+    import torch_npu
+except ImportError:
+    torch_npu = None
 
 PAD_SLOT_ID = -1
 
@@ -22,13 +21,6 @@ PAD_SLOT_ID = -1
 # Copyright (c) 2024, Tri Dao.
 # Adapted from https://github.com/Dao-AILab/causal-conv1d/blob/main/causal_conv1d/causal_conv1d_interface.py
 # and https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/mamba/ops/causal_conv1d.py
-
-from typing import Optional, Union
-
-import torch
-import torch.nn.functional as F
-import triton
-import triton.language as tl
 
 def is_npu() -> bool:
     return hasattr(torch, "npu") and torch.npu.is_available()
@@ -191,10 +183,10 @@ def _causal_conv1d_update_kernel_no_cache_len_no_mtp(
         x_T = x.reshape(sub_align_dim, align_val * seq_len).trans().reshape(align_val, seq_len * sub_align_dim).trans().reshape(seq_len * DIM_BLOCK,)
 
         x_new_T = tl.full([cat_len * DIM_BLOCK], 0, x_ptr.dtype.element_ty)
-        x_new_T = tl.insert_slice(x_new_T, conv_state_T, offsets = (0,), sizes = (state_len * DIM_BLOCK,), strides = (1,)) # [cat_len , DIM_BLOCK].view(-1)
-        x_new_T = tl.insert_slice(x_new_T, x_T, offsets = (state_len * DIM_BLOCK,), sizes = (seq_len * DIM_BLOCK,), strides = (1,))
+        x_new_T = extension.insert_slice(x_new_T, conv_state_T, offsets = (0,), sizes = (state_len * DIM_BLOCK,), strides = (1,)) # [cat_len , DIM_BLOCK].view(-1)
+        x_new_T = extension.insert_slice(x_new_T, x_T, offsets = (state_len * DIM_BLOCK,), sizes = (seq_len * DIM_BLOCK,), strides = (1,))
 
-        new_conv_state_T = tl.extract_slice(x_new_T, (seq_len * DIM_BLOCK,), (state_len * DIM_BLOCK,), (1,)) # [state_len, DIM_BLOCK].view(-1)
+        new_conv_state_T = extension.extract_slice(x_new_T, (seq_len * DIM_BLOCK,), (state_len * DIM_BLOCK,), (1,)) # [state_len, DIM_BLOCK].view(-1)
         new_conv_state = new_conv_state_T.reshape(state_len * align_val, sub_align_dim).trans().reshape(sub_align_dim * state_len, align_val).trans().reshape(DIM_BLOCK * state_len,) # [DIM_BLOCK, state_len].view(-1)
         tl.store(conv_state_ptr + conv_batch_offs * conv_batch_stride + doffs * state_len + tl.arange(0, DIM_BLOCK * state_len), new_conv_state)
 
@@ -213,7 +205,7 @@ def _causal_conv1d_update_kernel_no_cache_len_no_mtp(
             tl.store(out_ptr + pid * out_batch_stride + (doffs + tl.arange(0, DIM_BLOCK)) * out_len, result)
         else:
             for i in range(seq_len):
-                x_conv_part = tl.extract_slice(x_new_T, ((conv_begin + i) * DIM_BLOCK), (width * DIM_BLOCK), (1,)).to(tl.float32)
+                x_conv_part = extension.extract_slice(x_new_T, ((conv_begin + i) * DIM_BLOCK), (width * DIM_BLOCK), (1,)).to(tl.float32)
                 result = tl.sum((x_conv_part * weight_T).reshape(width, DIM_BLOCK), 0) + bias
                 if SILU_ACTIVATION:
                     result = result / (1 + tl.exp(-result))

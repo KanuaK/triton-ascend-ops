@@ -27,6 +27,7 @@ except Exception as e:
     print("import torch_npu failed.")
 import triton
 import triton.language as tl
+import triton.language.extra.cann.extension as extension
 
 
 
@@ -69,13 +70,13 @@ def npu_token_rearrangement_kernel(x_ptr, indices, output_ptr, n_elements, S : t
 
     # 3.load data by index & insert into output tensor in loop
     for i in tl.range(0, BLOCK_SIZE):
-        data_offset = D * tl.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
+        data_offset = D * extension.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
         data_mask = data_offset < n_elements
         data = tl.load(x_ptr + data_offset, data_mask)
-        output = tl.insert_slice(output, data, [i,D], [1,D], [1,1])
+        output = extension.insert_slice(output, data, [i, 0], [1, D], [1, 1])
 
     # 4.batch store to gm
-    out_offset = out_start + tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, D)[None, :]
+    out_offset = out_start + tl.arange(0, BLOCK_SIZE)[:,None] * D + tl.arange(0, D)[None, :]
     out_mask = out_offset < n_elements
     tl.store(output_ptr + out_offset, output, out_mask)
 

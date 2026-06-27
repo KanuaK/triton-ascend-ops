@@ -27,6 +27,7 @@ except Exception as e:
     print("import torch_npu failed.")
 import triton
 import triton.language as tl
+import triton.language.extra.cann.extension as extension
 
 
 def is_npu() -> bool:
@@ -59,7 +60,7 @@ def npu_token_reverse_kernel(x_ptr, indices, output_ptr, n_elements, S : tl.cons
     block_start = pid * BLOCK_SIZE * D
 
     # 1. batch load data
-    data_offset = D * tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, BLOCK_SIZE)[None, :]
+    data_offset = D * tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, D)[None, :]
     data_mask = data_offset < n_elements
     data = tl.load(x_ptr + block_start + data_offset, data_mask)
 
@@ -71,8 +72,8 @@ def npu_token_reverse_kernel(x_ptr, indices, output_ptr, n_elements, S : tl.cons
 
     # 3. extract token one by one and store
     for i in tl.range(0, BLOCK_SIZE):
-        x_sub = tl.extract_slice(data, [i,0], [1,D], [1,1])
-        output_offset = D * tl.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
+        x_sub = extension.extract_slice(data, [i, 0], [1, D], [1, 1])
+        output_offset = D * extension.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
         out_mask = output_offset < n_elements
         tl.store(output_ptr + output_offset, x_sub, out_mask)
 

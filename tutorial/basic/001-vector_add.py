@@ -26,6 +26,7 @@ import os
 import time
 
 import torch
+import torch_npu
 import triton
 import triton.language as tl
 
@@ -72,4 +73,3 @@ def run(dtype_name):
 if __name__ == "__main__":
     run(torch.int64)
     run(torch.int32) # prefer using int32 dtype
-

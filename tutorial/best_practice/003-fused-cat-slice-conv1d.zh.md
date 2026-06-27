@@ -57,14 +57,14 @@ new_conv_state = tl.where(mask, conv_state, loaded_x)
 
 以上两点会在后续的triton-ascend版本中自动识别并优化，本文主要考虑利用现有接口重新写出昇腾亲和的高性能实现。
 
-新代码中，我们利用triton-ascend的扩展Op`tl.insert_slice`来实现UB上的cat功能，规避了负数访问的读取，和冗余的mask计算，同时通过transpose操作将低维concat的不连续搬运转换到了高维的连续搬运，从而进一步提升性能：
+新代码中，我们利用triton-ascend的扩展Op`extension.insert_slice`来实现UB上的cat功能，规避了负数访问的读取，和冗余的mask计算，同时通过transpose操作将低维concat的不连续搬运转换到了高维的连续搬运，从而进一步提升性能。使用前需导入 `import triton.language.extra.cann.extension as extension`：
 ```python
 x = tl.load(x_ptr + pid * x_batch_stride + doffs * seq_len + tl.arange(0, DIM_BLOCK * seq_len))
 x_T = x.trans()
 
 x_new_T = tl.full([cat_len * DIM_BLOCK], 0, x_ptr.dtype.element_ty)
-x_new_T = tl.insert_slice(x_new_T, conv_state_T, offsets = (0,), sizes = (state_len * DIM_BLOCK,), strides = (1,)) # [cat_len , DIM_BLOCK].view(-1)
-x_new_T = tl.insert_slice(x_new_T, x_T, offsets = (state_len * DIM_BLOCK,), sizes = (seq_len * DIM_BLOCK,), strides = (1,))
+x_new_T = extension.insert_slice(x_new_T, conv_state_T, offsets = (0,), sizes = (state_len * DIM_BLOCK,), strides = (1,)) # [cat_len , DIM_BLOCK].view(-1)
+x_new_T = extension.insert_slice(x_new_T, x_T, offsets = (state_len * DIM_BLOCK,), sizes = (seq_len * DIM_BLOCK,), strides = (1,))
 ```
 
 ### 2. 32B对齐导致的性能劣化

@@ -1,4 +1,4 @@
-# 002-insert_slice.py说明
+# 001-insert_slice.py说明
 
 ## 功能
 大模型训练/推理中MOE Token重排场景下，新增insert_slice接口，实现数据合并写出到GM，提升性能
@@ -19,7 +19,7 @@
     :param strides:
     :type strides: tuple of ints
 """
-def insert_slice(ful, sub, offsets, sizes, strides, _builder=None, _generator=None) -> tensor
+def insert_slice(ful, sub, offsets, sizes, strides, _semantic=None, _generator=None) -> tensor
 ```
 
 ## 差异点概述
@@ -27,6 +27,7 @@ def insert_slice(ful, sub, offsets, sizes, strides, _builder=None, _generator=No
 GPU实现：每个kernel处理一个Token，利用多核优势能够达成很好的性能   
 NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到性能最佳，针对Moe重排，写出数据连续存放，该场景可以使用insert_slice接口，将多个从不同位置读取的Tensor数据合并后一次写出，提升性能   
 
+使用前需导入 `import triton.language.extra.cann.extension as extension`。
 
 ## 差异点详解
 
@@ -78,13 +79,13 @@ def npu_token_rearrangement_kernel(x_ptr, indices,
 <b><i>
     # 3.load data by index & insert into output tensor in loop
     for i in tl.range(0, BLOCK_SIZE):
-        data_offset = D * tl.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
+        data_offset = D * extension.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
         data_mask = data_offset < n_elements
         data = tl.load(x_ptr + data_offset, data_mask)
-        output = tl.insert_slice(output, data, [i,D], [1,D], [1,1])
+        output = extension.insert_slice(output, data, [i, 0], [1, D], [1, 1])
 </i></b>
     # 4.batch store to gm
-    out_offset = out_start + tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, D)[None, :]
+    out_offset = out_start + tl.arange(0, BLOCK_SIZE)[:,None] * D + tl.arange(0, D)[None, :]
     out_mask = out_offset < n_elements
     tl.store(output_ptr + out_offset, output, out_mask)
 </code></pre>
